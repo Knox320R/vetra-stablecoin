@@ -25,6 +25,7 @@ coverage.json
 .coverage_artifacts/
 .coverage_cache/
 .coverage_contracts/
+.claude
 
 # Build outputs
 dist/

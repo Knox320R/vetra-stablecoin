@@ -19,15 +19,11 @@ import * as path from "path";
  */
 
 interface DeploymentAddresses {
-  vetra: {
-    proxy: string;
-    implementation: string;
-  };
-  reserveOracle: {
-    proxy: string;
-    implementation: string;
-  };
-  vetraFunctionsConsumer?: string;
+  vetra?: string;
+  vetraImplementation?: string;
+  reserveOracle?: string;
+  reserveOracleImplementation?: string;
+  functionsConsumer?: string;
 }
 
 async function main() {
@@ -53,28 +49,48 @@ async function main() {
   const deployment: DeploymentAddresses = JSON.parse(fs.readFileSync(deploymentFile, "utf8"));
   console.log(`Loaded deployment addresses from: ${deploymentFile}\n`);
 
+  // Validate deployment addresses
+  if (!deployment.vetra || !deployment.reserveOracle) {
+    throw new Error(
+      `Invalid deployment file. Missing required addresses.\n` +
+      `Expected 'vetra' and 'reserveOracle' fields in: ${deploymentFile}`
+    );
+  }
+
   // Get contract instances
   console.log("Loading contract instances...");
   const Vetra = await ethers.getContractFactory("Vetra");
   const ReserveOracle = await ethers.getContractFactory("ReserveOracle");
 
-  const vetra = Vetra.attach(deployment.vetra.proxy);
-  const reserveOracle = ReserveOracle.attach(deployment.reserveOracle.proxy);
+  const vetra = Vetra.attach(deployment.vetra);
+  const reserveOracle = ReserveOracle.attach(deployment.reserveOracle);
 
   console.log(`Vetra proxy: ${await vetra.getAddress()}`);
   console.log(`ReserveOracle proxy: ${await reserveOracle.getAddress()}\n`);
 
-  // Check if signer has MINTER_ROLE
+  // Check if signer has MINTER_ROLE, auto-grant if needed
   const MINTER_ROLE = await vetra.MINTER_ROLE();
+  const DEFAULT_ADMIN_ROLE = await vetra.DEFAULT_ADMIN_ROLE();
   const hasMinterRole = await vetra.hasRole(MINTER_ROLE, signer.address);
+  const hasAdminRole = await vetra.hasRole(DEFAULT_ADMIN_ROLE, signer.address);
 
   if (!hasMinterRole) {
-    throw new Error(
-      `Signer ${signer.address} does not have MINTER_ROLE\n` +
-      `Please grant the role using: npx hardhat grant-role --role MINTER --account ${signer.address} --network ${network.name}`
-    );
+    if (hasAdminRole) {
+      console.log(`⚠️  Signer does not have MINTER_ROLE`);
+      console.log(`✓ Signer has ADMIN role, auto-granting MINTER_ROLE...`);
+      const grantTx = await vetra.grantRole(MINTER_ROLE, signer.address);
+      console.log(`Transaction hash: ${grantTx.hash}`);
+      await grantTx.wait();
+      console.log(`✓ MINTER_ROLE granted to ${signer.address}\n`);
+    } else {
+      throw new Error(
+        `Signer ${signer.address} does not have MINTER_ROLE or ADMIN role.\n` +
+        `Cannot proceed with minting.`
+      );
+    }
+  } else {
+    console.log(`✓ Signer has MINTER_ROLE\n`);
   }
-  console.log(`✓ Signer has MINTER_ROLE\n`);
 
   // Check if contract is paused
   const isPaused = await vetra.paused();
@@ -108,20 +124,55 @@ async function main() {
     console.log("Proceeding with stale data may result in over/under minting.");
   }
 
-  // Check if reserve is zero
+  // Check if reserve is zero and auto-update if admin
   if (reserveBalanceUSD === 0n) {
-    throw new Error(
-      `Reserve balance is zero. Cannot perform initial mint.\n` +
-      `Please update the reserve first using: npx hardhat poke-oracle --network ${network.name}`
-    );
+    console.log(`⚠️  Reserve balance is zero`);
+
+    if (hasAdminRole) {
+      console.log(`✓ Signer has ADMIN role, setting initial reserve data for testing...`);
+
+      // Check if signer has UPDATER_ROLE on ReserveOracle
+      const UPDATER_ROLE = await reserveOracle.UPDATER_ROLE();
+      const hasUpdaterRole = await reserveOracle.hasRole(UPDATER_ROLE, signer.address);
+
+      if (!hasUpdaterRole) {
+        console.log(`Granting UPDATER_ROLE to signer...`);
+        const grantTx = await reserveOracle.grantRole(UPDATER_ROLE, signer.address);
+        await grantTx.wait();
+        console.log(`✓ UPDATER_ROLE granted\n`);
+      }
+
+      // Set initial reserve: $100,000,000 (matching overview.txt)
+      const initialReserve = ethers.parseUnits("100000000", 18); // $100M
+      const currentTimestamp = (await ethers.provider.getBlock("latest"))!.timestamp;
+      const nonce = 1;
+
+      console.log(`Setting reserve to: $${ethers.formatUnits(initialReserve, 18)}`);
+      const updateTx = await reserveOracle.updateReserve(initialReserve, currentTimestamp, nonce);
+      console.log(`Transaction hash: ${updateTx.hash}`);
+      await updateTx.wait();
+      console.log(`✓ Reserve data updated\n`);
+
+      // Re-read reserve balance
+      const updatedReserve = await reserveOracle.reserveBalanceUSD();
+      console.log(`Updated Reserve Balance: $${ethers.formatUnits(updatedReserve, 18)}\n`);
+    } else {
+      throw new Error(
+        `Reserve balance is zero and signer does not have ADMIN role.\n` +
+        `Cannot proceed with initial mint.`
+      );
+    }
   }
+
+  // Re-read reserve balance (may have been updated)
+  const finalReserveBalance = await reserveOracle.reserveBalanceUSD();
 
   // Get current total supply
   const currentSupply = await vetra.totalSupply();
   console.log(`Current VTR Supply: ${ethers.formatUnits(currentSupply, 18)} VTR\n`);
 
   // Calculate mint amount (reserve - current supply)
-  const mintAmount = reserveBalanceUSD - currentSupply;
+  const mintAmount = finalReserveBalance - currentSupply;
 
   if (mintAmount <= 0n) {
     console.log(`✓ No minting needed. Total supply (${ethers.formatUnits(currentSupply, 18)} VTR) already matches or exceeds reserve.`);
@@ -142,7 +193,7 @@ async function main() {
   console.log(`Mint Amount: ${ethers.formatUnits(mintAmount, 18)} VTR`);
   console.log(`Mint Amount (wei): ${mintAmount.toString()}`);
   console.log(`New Total Supply: ${ethers.formatUnits(currentSupply + mintAmount, 18)} VTR`);
-  console.log(`Reserve Balance: ${ethers.formatUnits(reserveBalanceUSD, 18)} USD`);
+  console.log(`Reserve Balance: ${ethers.formatUnits(finalReserveBalance, 18)} USD`);
   console.log(`Backing Ratio: 1:1 (100%)\n`);
 
   // Perform the mint
@@ -162,14 +213,14 @@ async function main() {
   console.log("=== Final State ===");
   console.log(`Total Supply: ${ethers.formatUnits(finalSupply, 18)} VTR`);
   console.log(`Recipient Balance: ${ethers.formatUnits(recipientBalance, 18)} VTR`);
-  console.log(`Reserve Balance: ${ethers.formatUnits(reserveBalanceUSD, 18)} USD`);
+  console.log(`Reserve Balance: ${ethers.formatUnits(finalReserveBalance, 18)} USD`);
 
   // Check backing invariant
-  const isFullyBacked = finalSupply <= reserveBalanceUSD;
+  const isFullyBacked = finalSupply <= finalReserveBalance;
   console.log(`\nBacking Check: ${isFullyBacked ? "✓ PASS" : "✗ FAIL"}`);
 
   if (!isFullyBacked) {
-    console.log(`⚠️  WARNING: Total supply (${ethers.formatUnits(finalSupply, 18)}) exceeds reserve (${ethers.formatUnits(reserveBalanceUSD, 18)})`);
+    console.log(`⚠️  WARNING: Total supply (${ethers.formatUnits(finalSupply, 18)}) exceeds reserve (${ethers.formatUnits(finalReserveBalance, 18)})`);
   }
 
   console.log("\n=== Initial Mint Complete ===\n");

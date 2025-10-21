@@ -12,6 +12,8 @@
     "deploy:polygon": "hardhat run scripts/deploy.ts --network polygon",
     "verify:amoy": "hardhat run scripts/verify.ts --network amoy",
     "verify:polygon": "hardhat run scripts/verify.ts --network polygon",
+    "initial-mint:amoy": "hardhat run scripts/initial-mint.ts --network amoy",
+    "initial-mint:polygon": "hardhat run scripts/initial-mint.ts --network polygon",
     "lint": "echo 'Linting not configured yet'",
     "clean": "hardhat clean"
   },

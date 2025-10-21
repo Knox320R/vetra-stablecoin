@@ -8,7 +8,8 @@
       "Bash(npm run compile:*)",
       "Bash(npm test:*)",
       "Bash(npm run test:coverage:*)",
-      "Bash(npx hardhat test:*)"
+      "Bash(npx hardhat test:*)",
+      "Bash(node:*)"
     ],
     "deny": [],
     "ask": []

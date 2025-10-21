@@ -1,0 +1,61 @@
+# Security - Never commit these files
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets/
+private/
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+documents
+
+# Hardhat
+cache/
+artifacts/
+typechain/
+typechain-types/
+# Coverage reports
+coverage/
+coverage.json
+.coverage_artifacts/
+.coverage_cache/
+.coverage_contracts/
+
+# Build outputs
+dist/
+build/
+out/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Testing
+.nyc_output/
+
+# Deployment artifacts (if sensitive)
+deployments/localhost/
+deployments/hardhat/
+
+# Gas reports
+gas-report.txt
